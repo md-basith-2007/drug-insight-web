@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
+import * as pdfjsLib from 'pdfjs-dist';
 import { 
   FileText, 
   Pill, 
@@ -16,8 +17,13 @@ import {
   ChevronRight,
   Download,
   Copy,
-  Check
+  Check,
+  File,
+  FileUp
 } from 'lucide-react';
+
+// Set up PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface AnalysisResult {
   drugs: Array<{name: string, confidence: number}>;
@@ -35,9 +41,12 @@ export const CompleteMedicalAnalyzer = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [article, setArticle] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isProcessingPdf, setIsProcessingPdf] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [pdfProgress, setPdfProgress] = useState(0);
   const [results, setResults] = useState<AnalysisResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   // Drug patterns and side effects database
   const drugPatterns = [
@@ -247,19 +256,87 @@ export const CompleteMedicalAnalyzer = () => {
     }
   };
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  // PDF Processing Function
+  const extractTextFromPDF = async (file: File): Promise<string> => {
+    try {
+      setIsProcessingPdf(true);
+      setPdfProgress(0);
+      
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      
+      let fullText = '';
+      const totalPages = pdf.numPages;
+      
+      for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+        setPdfProgress((pageNum / totalPages) * 100);
+        
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map((item: any) => item.str)
+          .join(' ');
+        
+        fullText += pageText + '\n\n';
+        
+        // Small delay to show progress
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      setIsProcessingPdf(false);
+      return fullText.trim();
+      
+    } catch (error) {
+      setIsProcessingPdf(false);
+      throw new Error('Failed to extract text from PDF');
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string;
-        setArticle(text);
+    if (!file) return;
+
+    setUploadedFileName(file.name);
+    
+    try {
+      let text = '';
+      
+      if (file.type === 'application/pdf') {
+        toast({
+          title: "Processing PDF",
+          description: "Extracting text from PDF file...",
+        });
+        
+        text = await extractTextFromPDF(file);
+        
+        toast({
+          title: "PDF Processed Successfully",
+          description: `Extracted text from ${file.name}`,
+        });
+      } else {
+        // Handle text files
+        const reader = new FileReader();
+        text = await new Promise((resolve, reject) => {
+          reader.onload = (e) => resolve(e.target?.result as string);
+          reader.onerror = () => reject(new Error('Failed to read file'));
+          reader.readAsText(file);
+        });
+        
         toast({
           title: "File Uploaded",
           description: `Loaded ${file.name} successfully`,
         });
-      };
-      reader.readAsText(file);
+      }
+      
+      setArticle(text);
+      
+    } catch (error) {
+      toast({
+        title: "Upload Failed",
+        description: error instanceof Error ? error.message : "Failed to process file",
+        variant: "destructive",
+      });
+      setUploadedFileName(null);
     }
   };
 
@@ -310,13 +387,13 @@ ${results.sideEffects.map(effect => `• ${effect.effect} (${effect.frequency})`
         <div className="container mx-auto px-4 text-center">
           <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-sm rounded-full px-4 py-2 mb-6">
             <Sparkles className="w-4 h-4" />
-            <span className="text-sm font-medium">Advanced NLP Medical Analysis</span>
+            <span className="text-sm font-medium">PDF & Text Analysis with Advanced NLP</span>
           </div>
           <h1 className="text-4xl md:text-6xl font-bold mb-6">
             Drug Insight Web
           </h1>
           <p className="text-xl md:text-2xl text-white/90 max-w-3xl mx-auto">
-            Comprehensive medical article analysis using state-of-the-art natural language processing
+            Upload PDF medical articles or paste text for comprehensive drug analysis using advanced NLP
           </p>
         </div>
       </div>
@@ -333,12 +410,20 @@ ${results.sideEffects.map(effect => `• ${effect.effect} (${effect.frequency})`
             </div>
             
             <div className="space-y-4">
-              <Textarea
-                placeholder="Paste your medical article, case study, or clinical notes here for comprehensive analysis..."
-                value={article}
-                onChange={(e) => setArticle(e.target.value)}
-                className="min-h-[300px] resize-none border-border/50 focus:border-primary"
-              />
+              <div className="relative">
+                <Textarea
+                  placeholder="Paste your medical article, case study, or clinical notes here for comprehensive analysis... Or upload a PDF file using the button below."
+                  value={article}
+                  onChange={(e) => setArticle(e.target.value)}
+                  className="min-h-[300px] resize-none border-border/50 focus:border-primary"
+                />
+                {uploadedFileName && (
+                  <div className="absolute top-2 right-2 bg-primary/10 text-primary px-2 py-1 rounded text-xs flex items-center gap-1">
+                    <File className="w-3 h-3" />
+                    PDF Loaded
+                  </div>
+                )}
+              </div>
               
               <div className="flex items-center gap-4 flex-wrap">
                 <Button 
@@ -363,27 +448,49 @@ ${results.sideEffects.map(effect => `• ${effect.effect} (${effect.frequency})`
                   variant="outline" 
                   className="border-border/50"
                   onClick={() => fileInputRef.current?.click()}
+                  disabled={isProcessingPdf}
                 >
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload File
+                  {isProcessingPdf ? (
+                    <>
+                      <Activity className="w-4 h-4 mr-2 animate-spin" />
+                      Processing PDF...
+                    </>
+                  ) : (
+                    <>
+                      <FileUp className="w-4 h-4 mr-2" />
+                      Upload PDF/Text
+                    </>
+                  )}
                 </Button>
                 
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".txt,.doc,.docx"
+                  accept=".pdf,.txt,.doc,.docx"
                   onChange={handleFileUpload}
                   className="hidden"
                 />
+                
+                {uploadedFileName && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <File className="w-4 h-4" />
+                    <span>{uploadedFileName}</span>
+                  </div>
+                )}
               </div>
 
-              {isAnalyzing && (
+              {(isAnalyzing || isProcessingPdf) && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
-                    <span>Processing medical content...</span>
-                    <span>{progress}%</span>
+                    <span>
+                      {isProcessingPdf 
+                        ? "Extracting text from PDF..." 
+                        : "Processing medical content..."
+                      }
+                    </span>
+                    <span>{isProcessingPdf ? pdfProgress.toFixed(0) : progress}%</span>
                   </div>
-                  <Progress value={progress} className="h-2" />
+                  <Progress value={isProcessingPdf ? pdfProgress : progress} className="h-2" />
                 </div>
               )}
             </div>

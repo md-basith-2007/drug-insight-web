@@ -1,7 +1,7 @@
-import { MedicalAnalyzer } from '@/components/MedicalAnalyzer';
+import { CompleteMedicalAnalyzer } from '@/components/CompleteMedicalAnalyzer';
 
 const Index = () => {
-  return <MedicalAnalyzer />;
+  return <CompleteMedicalAnalyzer />;
 };
 
 export default Index;
